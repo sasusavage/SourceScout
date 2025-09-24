@@ -18,7 +18,7 @@ app = Flask(__name__)
 # Allow CORS from local files (origin 'null') and localhost
 CORS(
     app,
-    resources={r"/api/*": {"origins": ["null", r"http://127.0.0.1:*", r"http://localhost:*", "*"]}},
+    resources={r"/api/*": {"origins": ["null", r"http://127.0.0.1:*", r"http://localhost:*", "https://sourcescout.onrender.com", "*"]}},
 )
 
 PPLX_API_KEY = os.getenv("PPLX_API_KEY")
