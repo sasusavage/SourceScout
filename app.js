@@ -68,7 +68,7 @@ async function ask(query) {
   askBtn.disabled = true;
   setSkeleton(true);
   try {
-    const resp = await fetch(`${API_BASE}/api/ask`, {
+     const resp = await fetch('/api/ask', {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, history: convo, model: modelSelect.value }),
@@ -138,3 +138,4 @@ modelSelect?.addEventListener('change', () => {
 
 renderHistory();
 renderMessages();
+
