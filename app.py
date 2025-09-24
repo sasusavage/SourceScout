@@ -32,19 +32,19 @@ def health():
 # Serve frontend files for convenience during development
 @app.get("/")
 def index_html():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+  return send_from_directory(BASE_DIR, "index.html")
 
 @app.get("/index.html")
 def index_html_alias():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    return send_from_directory(BASE_DIR, "index.html")
 
 @app.get("/styles.css")
 def styles_css():
-    return send_from_directory(FRONTEND_DIR, "styles.css")
+    return send_from_directory(BASE_DIR, "styles.css")
 
 @app.get("/app.js")
 def app_js():
-    return send_from_directory(FRONTEND_DIR, "app.js")
+    return send_from_directory(BASE_DIR, "app.js")
 
 @app.post("/api/ask")
 def ask():
