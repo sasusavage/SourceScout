@@ -1,4 +1,4 @@
-const API_BASE = (location.origin.includes('https://sourcescout.onrender.com') || location.origin.includes('https://sourcescout.onrender.com')) ? '' : ''https://sourcescout.onrender.com'';
+const API_BASE = location.origin.startsWith('https://sourcescout.onrender.com') ? '' : 'https://sourcescout.onrender.com';
 const askForm = document.getElementById("askForm");
 const queryInput = document.getElementById("queryInput");
 const askBtn = document.getElementById("askBtn");
@@ -217,4 +217,5 @@ modelSelect?.addEventListener('change', () => {
 
 renderHistory();
 renderMessages();
+
 
