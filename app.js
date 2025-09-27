@@ -3,8 +3,6 @@ const askForm = document.getElementById("askForm");
 const queryInput = document.getElementById("queryInput");
 const askBtn = document.getElementById("askBtn");
 const statusEl = document.getElementById("status");
-const answerEl = document.getElementById("answer");
-const sourcesEl = document.getElementById("sources");
 const messagesEl = document.getElementById("messages");
 const historyList = document.getElementById("historyList");
 const clearHistoryBtn = document.getElementById("clearHistory");
@@ -14,9 +12,15 @@ const sidebarToggle = document.getElementById("sidebarToggle");
 const themeToggle = document.getElementById("themeToggle");
 const modelSelect = document.getElementById("modelSelect");
 
-let convo = []; // {role, content}
+let convo = []; // {role, content, sources?, pending?}
 let historyItems = JSON.parse(localStorage.getItem("history") || "[]"); // [{q,a,ts}]
-let settings = JSON.parse(localStorage.getItem("settings") || "{}");
+let settings;
+try {
+  settings = JSON.parse(localStorage.getItem("settings") || "{}") || {};
+} catch (err) {
+  settings = {};
+}
+if (typeof settings !== "object" || settings === null) settings = {};
 if (settings.model) modelSelect.value = settings.model;
 
 function toast(msg) {
@@ -27,6 +31,27 @@ function toast(msg) {
   setTimeout(() => el.remove(), 3000);
 }
 
+function applyTheme(theme, { announce = false } = {}) {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  if (themeToggle) {
+    const label = next === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    const icon = next === 'dark' ? '🌞' : '🌙';
+    themeToggle.textContent = icon;
+    themeToggle.setAttribute('aria-label', label);
+    themeToggle.setAttribute('title', label);
+  }
+  settings.theme = next;
+  localStorage.setItem('settings', JSON.stringify(settings));
+  if (announce) {
+    toast(`Theme: ${next === 'dark' ? 'Dark' : 'Light'}`);
+  }
+}
+
+const prefersDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
+const initialTheme = settings.theme || (prefersDark ? 'dark' : 'light');
+applyTheme(initialTheme);
+
 function renderHistory() {
   historyList.innerHTML = "";
   historyItems.forEach((item, idx) => {
@@ -34,44 +59,91 @@ function renderHistory() {
     li.textContent = item.q.slice(0, 60);
     li.title = item.q;
     li.addEventListener("click", () => {
-      answerEl.textContent = item.a;
-      sourcesEl.innerHTML = (item.sources || []).map(renderSource).join("");
+      convo = [
+        { role: "user", content: item.q },
+        { role: "assistant", content: item.a, sources: item.sources || [] },
+      ];
+      renderMessages();
       queryInput.value = item.q;
     });
     historyList.appendChild(li);
   });
 }
 
-function renderSource(src) {
-  const title = src.title || src.url || "Source";
-  const domain = src.domain || "";
-  const snippet = src.snippet || "";
-  const url = src.url || "#";
-  return `<div class="source"><div><strong>${title}</strong> ${domain ? `• ${domain}` : ""}</div><div>${snippet}</div><div><a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a></div></div>`;
+function escapeHtml(str = "") {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatContent(text = "") {
+  if (!text.trim()) return "";
+  const paragraphs = escapeHtml(text).split(/\n{2,}/);
+  return paragraphs
+    .map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+    .join("");
+}
+
+function renderSource(src = {}) {
+  let title = src.title || src.name || src.url || "Source";
+  const domain = escapeHtml(src.domain || "");
+  if (/^source\s+#?\d+/i.test(title) && domain) {
+    title = domain;
+  }
+  title = escapeHtml(title);
+  const snippet = escapeHtml(src.snippet || "");
+  const url = escapeHtml(src.url || "#");
+  return `<div class="source"><div class="source-title"><strong>${title}</strong>${domain ? ` • ${domain}` : ""}</div>${snippet ? `<div class="source-snippet">${snippet}</div>` : ""}<div><a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a></div></div>`;
 }
 
 function renderMessages() {
+  if (!convo.length) {
+    messagesEl.innerHTML = `<div class="empty-state">Start by asking a question to see a sourced answer.</div>`;
+    return;
+  }
+
   messagesEl.innerHTML = convo
-    .map(m => `<div class="msg ${m.role}">${m.role === 'user' ? '<strong>You:</strong> ' : '<strong>Assistant:</strong> '}${m.content}</div>`) 
+    .map(m => {
+      const label = m.role === 'user' ? 'You' : 'Assistant';
+      const body = m.pending
+        ? `<div class="message-body thinking">${escapeHtml(m.content || 'Thinking…')}</div>`
+        : `<div class="message-body">${formatContent(m.content || '')}</div>`;
+      const sourcesHtml = !m.pending && m.role === 'assistant' && m.sources?.length
+        ? `<div class="sources">${m.sources.map(renderSource).join("")}</div>`
+        : "";
+      return `<div class="msg ${m.role}${m.pending ? ' pending' : ''}"><div class="msg-label">${label}</div>${body}${sourcesHtml}</div>`;
+    })
     .join("");
+
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function setSkeleton(on) {
-  if (on) {
-    answerEl.innerHTML = '<div class="msg assistant">Thinking…</div>';
-  }
+function showThinking() {
+  convo.push({ role: "assistant", content: "Thinking…", pending: true });
+  renderMessages();
 }
 
 async function ask(query) {
   statusEl.textContent = "Thinking...";
   askBtn.disabled = true;
-  setSkeleton(true);
+  showThinking();
   try {
-     const resp = await fetch('/api/ask', {
+    const conversation = convo
+      .filter(msg => !msg.pending)
+      .map(({ role, content }) => ({ role, content }));
+
+    const historyPayload =
+      conversation.length && conversation[conversation.length - 1].role === 'user'
+        ? conversation.slice(0, -1)
+        : conversation;
+
+    const resp = await fetch(`${API_BASE}/api/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, history: convo, model: modelSelect.value }),
+      body: JSON.stringify({ query, history: historyPayload, model: modelSelect.value }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: resp.statusText }));
@@ -81,11 +153,12 @@ async function ask(query) {
     const answer = data.answer || "";
     const citations = data.citations || [];
 
-    convo.push({ role: "assistant", content: answer });
-    renderMessages();
+    if (convo.length && convo[convo.length - 1].pending) {
+      convo.pop();
+    }
 
-    answerEl.textContent = answer;
-    sourcesEl.innerHTML = citations.map(renderSource).join("");
+    convo.push({ role: "assistant", content: answer, sources: citations });
+    renderMessages();
 
     // Save to history
     historyItems.unshift({ q: query, a: answer, sources: citations, ts: Date.now() });
@@ -94,9 +167,17 @@ async function ask(query) {
     renderHistory();
     toast('Answer ready');
   } catch (e) {
+    if (convo.length && convo[convo.length - 1].pending) {
+      convo.pop();
+      renderMessages();
+    }
     statusEl.textContent = `Error: ${e.message}`;
     toast(`Error: ${e.message}`);
   } finally {
+    if (convo.length && convo[convo.length - 1].pending) {
+      convo.pop();
+      renderMessages();
+    }
     askBtn.disabled = false;
     setTimeout(() => (statusEl.textContent = ""), 2000);
   }
@@ -108,8 +189,6 @@ askForm.addEventListener("submit", (e) => {
   if (!q) return;
   convo.push({ role: "user", content: q });
   renderMessages();
-  answerEl.textContent = "";
-  sourcesEl.innerHTML = "";
   queryInput.value = "";
   ask(q);
 });
@@ -126,8 +205,8 @@ sidebarToggle?.addEventListener('click', () => {
 });
 
 themeToggle?.addEventListener('click', () => {
-  const dark = document.documentElement.dataset.theme !== 'light';
-  document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next, { announce: true });
 });
 
 modelSelect?.addEventListener('change', () => {
@@ -138,4 +217,3 @@ modelSelect?.addEventListener('change', () => {
 
 renderHistory();
 renderMessages();
-
