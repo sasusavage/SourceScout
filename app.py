@@ -304,4 +304,4 @@ def api_chat():
         return jsonify({"error": str(e)}), 502
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
