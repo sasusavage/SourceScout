@@ -1,5 +1,7 @@
 import os
 import json
+import re
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -18,12 +20,71 @@ app = Flask(__name__)
 # Allow CORS from local files (origin 'null') and localhost
 CORS(
     app,
-    resources={r"/api/*": {"origins": ["null", r"http://127.0.0.1:*", r"http://localhost:*", "https://sourcescout.onrender.com", "*"]}},
+    resources={r"/api/*": {"origins": ["null", r"http://127.0.0.1:*", r"http://localhost:*", "https://sourcescout.onrender.com","*"]}},
 )
 
 PPLX_API_KEY = os.getenv("PPLX_API_KEY")
 PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 DEFAULT_MODEL = os.getenv("PPLX_MODEL", "sonar-pro")
+INCLUDE_RAW = os.getenv("PPLX_INCLUDE_RAW", "false").lower() in {"1", "true", "yes"}
+
+
+def normalize_citations(items):
+    normalized = []
+    if not items:
+        return normalized
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            url = item
+            domain = urlparse(url).netloc if url else ""
+            normalized.append({
+                "title": domain or f"Source {idx}",
+                "url": url,
+                "domain": domain,
+                "snippet": "",
+            })
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        url = item.get("url") or item.get("source") or item.get("source_url")
+        domain = item.get("domain")
+        if not domain and url:
+            domain = urlparse(url).netloc
+
+        title = item.get("title") or item.get("name") or item.get("id")
+        if title and isinstance(title, str) and title.lower().startswith("source #") and domain:
+            title = domain
+        if not title:
+            title = domain or f"Source {idx}"
+
+        snippet = (
+            item.get("snippet")
+            or item.get("description")
+            or item.get("text")
+            or ""
+        )
+
+        normalized.append({
+            "title": title,
+            "url": url,
+            "domain": domain or "",
+            "snippet": snippet,
+        })
+    return normalized
+
+
+INLINE_CITATION_RE = re.compile(r"(\s*\[\s*(?:\d+|[a-z]{1,3}\d*|source\s*#?\d+)\s*\])+", re.IGNORECASE)
+
+
+def strip_inline_citations(text: str | None) -> str:
+    if not text:
+        return ""
+    cleaned = INLINE_CITATION_RE.sub("", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s*\n\s*", lambda m: "\n", cleaned)
+    return cleaned.strip()
 
 @app.get("/health")
 def health():
@@ -32,19 +93,19 @@ def health():
 # Serve frontend files for convenience during development
 @app.get("/")
 def index_html():
-  return send_from_directory(BASE_DIR, "index.html")
+    return send_from_directory(BASE_DIR, "index.html")
 
 @app.get("/index.html")
 def index_html_alias():
-    return send_from_directory(BASE_DIR, "index.html")
+    return send_from_directory(BASE_DIR,  "index.html")
 
 @app.get("/styles.css")
 def styles_css():
-    return send_from_directory(BASE_DIR, "styles.css")
+    return send_from_directory(BASE_DIR,  "styles.css")
 
 @app.get("/app.js")
 def app_js():
-    return send_from_directory(BASE_DIR, "app.js")
+    return send_from_directory(BASE_DIR,  "app.js")
 
 @app.post("/api/ask")
 def ask():
@@ -60,9 +121,17 @@ def ask():
     if not query or not isinstance(query, str):
         return jsonify({"error": "Query is required as a string"}), 400
 
-    # Minimal messages payload: start with only the current user message
-    # (You can re-enable multi-turn later once the basics are working.)
-    messages = [{"role": "user", "content": query}]
+    system_prompt = (
+        "You are SourceScout, a friendly, helpful research companion. "
+        "Chat with users the way a supportive friend would: warm, polite, and empathetic. "
+        "Use natural conversation cues (e.g., 'That’s a great question!' or 'I get what you mean'), "
+        "keep explanations clear and structured without sounding like a lecture, and match the user's tone. "
+        "Stay concise unless they ask for more detail, be honest about uncertainty while guiding them forward, "
+        "and always ground insights in reliable sources, mentioning them naturally and listing citations."
+    )
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": query})
 
     # Prefer SDK if available; otherwise fallback to HTTP
     out = None
@@ -89,7 +158,7 @@ def ask():
         payload = {
             "model": model,
             "messages": messages,
-            "temperature": 0.3,
+            "temperature": 0.65,
             "top_p": 0.9,
             "return_citations": True,
             "stream": False,
@@ -142,11 +211,14 @@ def ask():
     except Exception:
         pass
 
-    return jsonify({
-        "answer": answer_text or "",
-        "citations": citations,
-        "raw": out,
-    })
+    payload = {
+        "answer": strip_inline_citations(answer_text),
+        "citations": normalize_citations(citations),
+    }
+    if INCLUDE_RAW:
+        payload["raw"] = out
+
+    return jsonify(payload)
 
 @app.post("/api/search")
 def api_search():
@@ -232,4 +304,4 @@ def api_chat():
         return jsonify({"error": str(e)}), 502
 
 if __name__ == "__main__":
-    app.run( debug=False)
+    app.run(debug=True)
