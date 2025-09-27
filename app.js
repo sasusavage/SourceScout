@@ -1,4 +1,4 @@
-const API_BASE = (location.origin.includes('127.0.0.1:5000') || location.origin.includes('localhost:5000')) ? '' : 'http://127.0.0.1:5000';
+const API_BASE = (location.origin.includes('https://sourcescout.onrender.com') || location.origin.includes('https://sourcescout.onrender.com')) ? '' : ''https://sourcescout.onrender.com'';
 const askForm = document.getElementById("askForm");
 const queryInput = document.getElementById("queryInput");
 const askBtn = document.getElementById("askBtn");
@@ -217,3 +217,4 @@ modelSelect?.addEventListener('change', () => {
 
 renderHistory();
 renderMessages();
+
