@@ -12,6 +12,7 @@ const sidebarToggle = document.getElementById("sidebarToggle");
 const themeToggle = document.getElementById("themeToggle");
 const modelSelect = document.getElementById("modelSelect");
 const personaSelect = document.getElementById("personaSelect");
+const modeSelect = document.getElementById("modeSelect");
 let convo = []; // {role, content, sources?, pending?}
 let historyItems = JSON.parse(localStorage.getItem("history") || "[]"); // [{q,a,ts}]
 let settings;
@@ -38,6 +39,19 @@ if (settings.personality && availablePersonas.includes(settings.personality)) {
   if (settings.personality && !availablePersonas.includes(settings.personality)) {
     delete settings.personality;
     localStorage.setItem("settings", JSON.stringify(settings));
+  }
+}
+
+const availableModes = modeSelect ? Array.from(modeSelect.options).map((opt) => opt.value) : [];
+if (modeSelect) {
+  if (settings.mode && availableModes.includes(settings.mode)) {
+    modeSelect.value = settings.mode;
+  } else {
+    modeSelect.value = availableModes[0];
+    if (settings.mode && !availableModes.includes(settings.mode)) {
+      delete settings.mode;
+      localStorage.setItem("settings", JSON.stringify(settings));
+    }
   }
 }
 
@@ -75,7 +89,8 @@ function renderHistory() {
   historyItems.forEach((item, idx) => {
     const li = document.createElement("li");
     const personaLabel = item.personality === "fluent" ? "🗣️" : "🎤";
-    li.textContent = `${personaLabel} ${item.q.slice(0, 56)}`;
+    const modeLabel = item.mode === "web" ? "🌐" : "💬";
+    li.textContent = `${modeLabel} ${personaLabel} ${item.q.slice(0, 56)}`;
     li.title = item.q;
     li.addEventListener("click", () => {
       convo = [
@@ -87,6 +102,11 @@ function renderHistory() {
       if (item.personality && availablePersonas.includes(item.personality)) {
         personaSelect.value = item.personality;
         settings.personality = item.personality;
+        localStorage.setItem("settings", JSON.stringify(settings));
+      }
+      if (item.mode && availableModes.includes(item.mode)) {
+        modeSelect.value = item.mode;
+        settings.mode = item.mode;
         localStorage.setItem("settings", JSON.stringify(settings));
       }
     });
@@ -172,6 +192,7 @@ async function ask(query) {
         history: historyPayload,
         model: modelSelect.value,
         personality: personaSelect.value,
+        mode: modeSelect ? modeSelect.value : "chat",
       }),
     });
     if (!resp.ok) {
@@ -181,6 +202,10 @@ async function ask(query) {
     const data = await resp.json();
     const answer = data.answer || "";
     const citations = data.citations || [];
+
+    if (data.web_search_disabled) {
+      toast(data.answer || 'Web search is currently unavailable.');
+    }
 
     if (convo.length && convo[convo.length - 1].pending) {
       convo.pop();
@@ -195,6 +220,7 @@ async function ask(query) {
       a: answer,
       sources: citations,
       personality: data.personality || personaSelect.value,
+      mode: data.mode || (modeSelect ? modeSelect.value : "chat"),
       ts: Date.now(),
     });
     historyItems = historyItems.slice(0, 50);
@@ -255,6 +281,13 @@ personaSelect?.addEventListener('change', () => {
   localStorage.setItem('settings', JSON.stringify(settings));
   const label = personaSelect.value === 'fluent' ? 'Fluent English' : 'Pidgin Vibes';
   toast(`Personality: ${label}`);
+});
+
+modeSelect?.addEventListener('change', () => {
+  settings.mode = modeSelect.value;
+  localStorage.setItem('settings', JSON.stringify(settings));
+  const label = modeSelect.value === 'web' ? 'Web Search' : 'Chat';
+  toast(`Mode: ${label}`);
 });
 
 renderHistory();

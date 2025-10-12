@@ -1,63 +1,74 @@
-# Research Assistant (OpenAI API)
+# SourceScout Research Assistant
 
-A minimal full-stack web app that lets you ask questions and get sourced answers using OpenAI's Chat Completions API.
+A lightweight AI assistant that answers questions with citations. Choose between standard chat (OpenAI/OpenRouter) and a Perplexity-powered web search mode while keeping Sasu Jnr's personalities.
 
-## Feature
-- HTML/CSS/JS frontend with history sidebar
-- Python Flask backend that calls OpenAI's Chat Completions API
-- Built-in personality switcher (default Sasu Jnr Pidgin vibes, optional Fluent English mode)
-- CORS enabled for local development
-- Shows answer and sources (citations)
+## Features
+- HTML/CSS/JS frontend with history, theming, and persona picker
+- Flask backend proxying requests to OpenAI/OpenRouter or Perplexity
+- Web search mode that surfaces live sources (with graceful fallback messaging)
+- Personality-aware responses (Pidgin default + Fluent English)
+- Knowledge-cutoff guardrails for chat mode (October 2023)
 
 ## Prerequisites
 - Python 3.10+
-- An OpenAI API key
+- At least one of:
+  - OpenAI API key (for chat mode)
+  - OpenRouter API key (alternative chat provider)
+	- Perplexity API key (exposed as `PPLX_API_KEY`) for web search mode
 
 ## Setup (Windows PowerShell)
 
-1) Copy backend/.env.example to backend/.env and paste your API key
+1. Create your environment file
 
-```
-Copy-Item .\backend\.env.example .\backend\.env
-notepad .\backend\.env
-# set OPENAI_API_KEY=your_key_here, save & close
-# optionally set OPENROUTER_API_KEY (and related OPENROUTER_* vars) if you prefer routing through OpenRouter
-```
+	```powershell
+	Copy-Item .\.env .\.env.local -ErrorAction SilentlyContinue
+	notepad .\.env
+	```
 
-2) Create and activate a virtual environment, then install dependencies
-```
-python -m venv .\.venv
-.\.venv\Scripts\Activate.ps1
-pip install -r .\backend\requirements.txt
-```
+	Populate the placeholders:
+		```properties
+		OPENAI_API_KEY=your-openai-key          # optional if you use OpenRouter
+		OPENROUTER_API_KEY=your-openrouter-key  # optional alternative
+		PPLX_API_KEY=your-perplexity-key        # required for web search mode
+		```
 
-3) Run the backend (Flask)
-```
-$env:FLASK_APP = "backend/app.py"; python .\backend\app.py
-```
-The server will start at http://127.0.0.1:5000
+2. Create a virtual environment and install dependencies
 
-4) Open the frontend
-- Open the file .\frontend\index.html in your browser (double-click), or
-- Serve it with a simple HTTP server and go to http://127.0.0.1:5500 (optional)
+	```powershell
+	python -m venv .\.venv
+	.\.venv\Scripts\Activate.ps1
+	pip install -r requirements.txt
+	```
 
-## Configuration
-- Default model can be overridden with environment variable OPENAI_MODEL (defaults to `gpt-4o-mini`)
-- OPENROUTER_API_KEY enables routing requests through OpenRouter as a fallback when an OpenAI key isn't provided. Optional companion variables: OPENROUTER_API_URL, OPENROUTER_SITE_URL, OPENROUTER_APP_NAME.
-- Server host/port can be changed with APP_HOST and APP_PORT (defaults to 127.0.0.1:5000). APP_DEBUG toggles Flask debug mode.
-- Frontend model picker now targets OpenAI models (`gpt-4o-mini`, `gpt-4o`, `o4-mini`, `gpt-4.1-mini`). Adjust the list in `frontend/index.html` if you prefer different options.
-- Need the house style? Check `backend/sasu_jnr_prompt.md` for the full Sasu Jnr system prompt, ready to drop into Codex or any assistant runtime.
-- Customize persona injection with `SYSTEM_PROMPT_PATH` (defaults to `backend/sasu_jnr_prompt.md`) and `INJECT_SYSTEM_PROMPT` (`true`/`false`). The backend falls back to an embedded Sasu Jnr summary if the file can't be read.
-- Additional personality prompts:
-	- `PERSONALITY_PIDGIN_PATH` (defaults to `SYSTEM_PROMPT_PATH`) feeds the Pidgin/Naija vibe.
-	- `PERSONALITY_FLUENT_PATH` (defaults to `backend/fluent_persona_prompt.md`) feeds the fluent-English persona.
-	- `DEFAULT_PERSONALITY` (`pidgin` or `fluent`) selects the startup mode; frontend still defaults to Pidgin.
-- Backend listens on 127.0.0.1:5000
+3. Run the Flask backend
 
-## Notes
-- Do NOT expose your API key to the frontend. The key is only used on the backend.
-- OpenAI responses do not include first-party web citations. The app surfaces any links present in the response body as "citations." 
-- If you see CORS errors, ensure the backend is running and that you're using http://127.0.0.1 or a local file.
+	```powershell
+	$env:FLASK_APP = "app.py"
+	python app.py
+	```
 
-## Health Check
-Visit http://127.0.0.1:5000/health to verify the server is up.
+	The server listens on http://127.0.0.1:5000 by default.
+
+4. Open the frontend
+	- Double-click `index.html`, or
+	- Serve the folder via any static server (optional) and browse to it.
+
+## Using Web Search Mode
+- Toggle the **Mode** selector (🌐 Web Search) in the header to route questions through Perplexity.
+- Responses include live citations when available.
+- If Perplexity is unreachable or the key is invalid, the assistant replies with: “Due to high demand Web SASU has turned off web search.”
+
+## Configuration Reference
+- `OPENAI_MODEL` sets the default OpenAI/OpenRouter model (`gpt-4o-mini` by default).
+- `PPLX_MODEL` controls which Perplexity model is queried (`llama-3.1-sonar-small-128k-online` by default).
+- `SYSTEM_PROMPT_PATH`, `PERSONALITY_PIDGIN_PATH`, `PERSONALITY_FLUENT_PATH`, and `DEFAULT_PERSONALITY` tune persona behavior.
+- `APP_HOST`, `APP_PORT`, and `APP_DEBUG` tweak the Flask server runtime.
+- Set `INJECT_SYSTEM_PROMPT=false` to disable automatic persona injection.
+
+## Tips
+- API keys stay on the backend—never expose them to the frontend.
+- Visit `http://127.0.0.1:5000/health` for a quick health check.
+- History, persona, model, and mode preferences persist in local storage.
+
+## License
+MIT (see `LICENSE` if provided).

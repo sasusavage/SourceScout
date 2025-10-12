@@ -5,15 +5,18 @@ import logging
 from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from dotenv import load_dotenv
 import requests
-
-# Load environment variables from backend/.env if present
+from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.getenv(
     "FRONTEND_DIR",
-    os.path.normpath(os.path.join(BASE_DIR, "..", "frontend"))
+    os.path.normpath(os.path.join(BASE_DIR))
 )
+
+# Load environment variables from potential .env locations
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, "backend", ".env"))
+load_dotenv(os.path.join(BASE_DIR, "..", ".env"))
 
 logger = logging.getLogger("sourcescout")
 
@@ -30,11 +33,97 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_API_URL = os.getenv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions")
 OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "https://sourcescout.local")
 OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "SourceScout")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+CHAT_DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 INCLUDE_RAW = os.getenv("OPENAI_INCLUDE_RAW", "false").lower() in {"1", "true", "yes"}
 APP_HOST = os.getenv("APP_HOST", os.getenv("FLASK_RUN_HOST", "127.0.0.1"))
 APP_PORT = int(os.getenv("APP_PORT", os.getenv("PORT", os.getenv("FLASK_RUN_PORT", "5000"))))
 APP_DEBUG = os.getenv("APP_DEBUG", os.getenv("FLASK_DEBUG", "1")).lower() in {"1", "true", "yes"}
+PPLX_API_KEY = os.getenv("PPLX_API_KEY") or os.getenv("PERPLEXITY_API_KEY")
+PPLX_API_URL = os.getenv("PPLX_API_URL", os.getenv("PERPLEXITY_API_URL", "https://api.perplexity.ai/chat/completions"))
+PPLX_MODEL = os.getenv("PPLX_MODEL", os.getenv("PERPLEXITY_MODEL", "llama-3.1-sonar-small-128k-online"))
+
+WEB_SEARCH_DISABLED_MESSAGE = "Due to high demand Web SASU has turned off web search."
+
+QUICK_QUESTIONS: list[dict[str, str]] = [
+    {
+        "title": "Summarize a topic",
+        "prompt": "Give me a concise summary of the latest developments in Nigerian tech startups.",
+    },
+    {
+        "title": "Compare perspectives",
+        "prompt": "Compare the key policies of Nigeria and Ghana on renewable energy adoption.",
+    },
+    {
+        "title": "Explain a concept",
+        "prompt": "Explain blockchain as if I'm a secondary school student, with relatable examples.",
+    },
+    {
+        "title": "Plan an action",
+        "prompt": "Draft a one-week self-study plan to learn Python for data analysis from scratch.",
+    },
+]
+
+MONTH_NAME_TO_INDEX = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+POST_CUTOFF_MONTHS_2023 = {11, 12}
+YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
+MONTH_YEAR_PATTERN = re.compile(r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2})", re.IGNORECASE)
+CUTOFF_PHRASES = [
+    "after october 2023",
+    "beyond october 2023",
+    "since october 2023",
+    "post october 2023",
+]
+
+
+def cutoff_message(personality_key: str) -> str:
+    if personality_key == "fluent":
+        return (
+            "I’m still working with verified knowledge. "
+            "SASU is already digging into fresh research to refill my databank, so I’ll serve you the update once it lands."
+        )
+    return (
+        "Omo, this gist don pass the one wey I fit confirm reach ooo Killer. "
+        "SASU don enter research mode to top up the databank, so hold on small make I drop the fresh update later."
+    )
+
+
+def references_post_cutoff(text: str | None) -> bool:
+    if not text:
+        return False
+
+    lower = text.lower()
+    if any(phrase in lower for phrase in CUTOFF_PHRASES):
+        return True
+
+    for month_name, year_str in MONTH_YEAR_PATTERN.findall(text):
+        year = int(year_str)
+        month = MONTH_NAME_TO_INDEX.get(month_name.lower())
+        if year > 2023 or (year == 2023 and month in POST_CUTOFF_MONTHS_2023):
+            return True
+
+    for year_str in YEAR_PATTERN.findall(text):
+        try:
+            year = int(year_str)
+        except ValueError:
+            continue
+        if year >= 2024:
+            return True
+
+    return False
 PERSONALITY_PIDGIN_PATH = os.getenv(
     "PERSONALITY_PIDGIN_PATH" ,
     os.getenv("SYSTEM_PROMPT_PATH", os.path.join(BASE_DIR, "sasu_jnr_prompt.md")),
@@ -63,13 +152,23 @@ FLUENT_PROMPT_FALLBACK = (
 def load_system_prompt(path: str | None, fallback: str) -> str:
     if not path:
         return fallback
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            contents = handle.read().strip()
-            if contents:
-                return contents
-    except OSError as exc:
-        logger.warning("Unable to read system prompt file %s: %s", path, exc)
+
+    candidates: list[str] = []
+    if not os.path.isabs(path):
+        candidates.append(os.path.join(BASE_DIR, path))
+        candidates.append(os.path.join(os.path.dirname(BASE_DIR), path))
+    candidates.append(path)
+
+    for candidate in candidates:
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                contents = handle.read().strip()
+                if contents:
+                    return contents
+        except OSError:
+            continue
+
+    logger.info("Unable to read system prompt file %s (candidates: %s)", path, candidates)
     return fallback
 
 
@@ -117,6 +216,30 @@ def post_chat_completion(payload: dict):
     )
     resp.raise_for_status()
     return resp
+
+
+def perplexity_search(messages: list[dict[str, str]]):
+    if not PPLX_API_KEY:
+        raise RuntimeError("missing_perplexity_key")
+
+    headers = {
+        "Authorization": f"Bearer {PPLX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": PPLX_MODEL,
+        "messages": messages,
+        "temperature": 0.65,
+        "top_p": 0.9,
+    }
+    resp = requests.post(
+        PPLX_API_URL,
+        headers=headers,
+        data=json.dumps(payload),
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def normalize_citations(items):
@@ -199,18 +322,30 @@ def app_js():
 
 @app.post("/api/ask")
 def ask():
-    if not OPENAI_API_KEY and not OPENROUTER_API_KEY:
-        return jsonify({"error": "Server missing OPENAI_API_KEY or OPENROUTER_API_KEY"}), 500
-
     data = request.get_json(silent=True) or {}
     query = data.get("query")
     history = data.get("history", [])  # [{role, content}]
-    model = data.get("model") or DEFAULT_MODEL
+    model = data.get("model") or CHAT_DEFAULT_MODEL
     requested_personality = data.get("personality")
     personality_key, system_prompt = resolve_personality(requested_personality)
+    mode = (data.get("mode") or "chat").strip().lower()
+    is_web_mode = mode in {"web", "web-search", "search", "perplexity"}
+
+    if not is_web_mode and not OPENAI_API_KEY and not OPENROUTER_API_KEY:
+        return jsonify({"error": "Server missing OPENAI_API_KEY or OPENROUTER_API_KEY"}), 500
 
     if not query or not isinstance(query, str):
         return jsonify({"error": "Query is required as a string"}), 400
+
+    if not is_web_mode and references_post_cutoff(query):
+        message = cutoff_message(personality_key)
+        payload = {
+            "answer": message,
+            "citations": [],
+            "personality": personality_key,
+            "knowledge_cutoff": "October 2023",
+        }
+        return jsonify(payload)
 
     messages = []
     if INJECT_SYSTEM_PROMPT and system_prompt:
@@ -220,6 +355,53 @@ def ask():
         m for m in history if isinstance(m, dict) and {"role", "content"} <= set(m.keys())
     )
     messages.append({"role": "user", "content": query})
+
+    if is_web_mode:
+        try:
+            out = perplexity_search(messages)
+            choice0 = (out.get("choices", []) or [None])[0] or {}
+            message = choice0.get("message") or {}
+            answer_text = message.get("content") or out.get("answer") or ""
+            citations = (
+                out.get("citations")
+                or choice0.get("citations")
+                or message.get("citations")
+                or out.get("sources")
+                or []
+            )
+            payload = {
+                "answer": strip_inline_citations(answer_text),
+                "citations": normalize_citations(citations),
+                "personality": personality_key,
+                "mode": "web",
+            }
+            if INCLUDE_RAW:
+                payload["raw"] = out
+            return jsonify(payload)
+        except RuntimeError as exc:
+            if str(exc) != "missing_perplexity_key":
+                app.logger.error("Perplexity runtime error: %s", exc)
+            else:
+                app.logger.error("Perplexity key missing when web search requested")
+        except requests.HTTPError as exc:
+            err_resp = getattr(exc, "response", None)
+            try:
+                err_json = err_resp.json() if err_resp is not None else {"message": str(exc)}
+            except Exception:
+                err_json = {"message": str(exc), "text": getattr(err_resp, "text", "")}
+            status_code = getattr(err_resp, "status_code", 502)
+            app.logger.error("Perplexity HTTPError %s: %s", status_code, err_json)
+        except requests.RequestException as exc:
+            app.logger.error("Perplexity RequestException: %s", exc)
+
+        payload = {
+            "answer": WEB_SEARCH_DISABLED_MESSAGE,
+            "citations": [],
+            "personality": personality_key,
+            "mode": "web",
+            "web_search_disabled": True,
+        }
+        return jsonify(payload)
 
     payload = {
         "model": model,
@@ -293,6 +475,11 @@ def api_search():
         "details": "OpenAI's Chat Completions API does not provide web search results."
     }), 501
 
+
+@app.get("/api/quick-questions")
+def quick_questions():
+    return jsonify({"questions": QUICK_QUESTIONS})
+
 @app.post("/api/chat")
 def api_chat():
     if not OPENAI_API_KEY and not OPENROUTER_API_KEY:
@@ -300,7 +487,7 @@ def api_chat():
 
     body = request.get_json(silent=True) or {}
     messages = body.get("messages")
-    model = body.get("model") or DEFAULT_MODEL
+    model = body.get("model") or CHAT_DEFAULT_MODEL
     requested_personality = body.get("personality")
     personality_key, system_prompt = resolve_personality(requested_personality)
 

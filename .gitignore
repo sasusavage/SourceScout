@@ -1,4 +1,16 @@
-.venv/
+# Python cache and bytecode
 __pycache__/
-*.pyc
-backend/.env
+*.py[cod]
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+
+# Editor settings
+.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store
