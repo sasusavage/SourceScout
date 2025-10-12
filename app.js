@@ -1,4 +1,4 @@
-const API_BASE = location.origin.startsWith('https://sourcescout.onrender.com') ? '' : 'https://sourcescout.onrender.com';
+const API_BASE = location.protocol === 'file:' ? 'http://127.0.0.1:5000' : '';
 const askForm = document.getElementById("askForm");
 const queryInput = document.getElementById("queryInput");
 const askBtn = document.getElementById("askBtn");
@@ -11,6 +11,7 @@ const sidebar = document.getElementById("sidebar");
 const sidebarToggle = document.getElementById("sidebarToggle");
 const themeToggle = document.getElementById("themeToggle");
 const modelSelect = document.getElementById("modelSelect");
+const personaSelect = document.getElementById("personaSelect");
 
 let convo = []; // {role, content, sources?, pending?}
 let historyItems = JSON.parse(localStorage.getItem("history") || "[]"); // [{q,a,ts}]
@@ -21,7 +22,25 @@ try {
   settings = {};
 }
 if (typeof settings !== "object" || settings === null) settings = {};
-if (settings.model) modelSelect.value = settings.model;
+
+const availableModels = Array.from(modelSelect.options).map((opt) => opt.value);
+if (settings.model && availableModels.includes(settings.model)) {
+  modelSelect.value = settings.model;
+} else if (settings.model && !availableModels.includes(settings.model)) {
+  delete settings.model;
+  localStorage.setItem("settings", JSON.stringify(settings));
+}
+
+const availablePersonas = Array.from(personaSelect.options).map((opt) => opt.value);
+if (settings.personality && availablePersonas.includes(settings.personality)) {
+  personaSelect.value = settings.personality;
+} else {
+  personaSelect.value = availablePersonas[0];
+  if (settings.personality && !availablePersonas.includes(settings.personality)) {
+    delete settings.personality;
+    localStorage.setItem("settings", JSON.stringify(settings));
+  }
+}
 
 function toast(msg) {
   const el = document.createElement('div');
@@ -56,7 +75,8 @@ function renderHistory() {
   historyList.innerHTML = "";
   historyItems.forEach((item, idx) => {
     const li = document.createElement("li");
-    li.textContent = item.q.slice(0, 60);
+    const personaLabel = item.personality === "fluent" ? "🗣️" : "🎤";
+    li.textContent = `${personaLabel} ${item.q.slice(0, 56)}`;
     li.title = item.q;
     li.addEventListener("click", () => {
       convo = [
@@ -65,6 +85,11 @@ function renderHistory() {
       ];
       renderMessages();
       queryInput.value = item.q;
+      if (item.personality && availablePersonas.includes(item.personality)) {
+        personaSelect.value = item.personality;
+        settings.personality = item.personality;
+        localStorage.setItem("settings", JSON.stringify(settings));
+      }
     });
     historyList.appendChild(li);
   });
@@ -143,7 +168,12 @@ async function ask(query) {
     const resp = await fetch(`${API_BASE}/api/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, history: historyPayload, model: modelSelect.value }),
+      body: JSON.stringify({
+        query,
+        history: historyPayload,
+        model: modelSelect.value,
+        personality: personaSelect.value,
+      }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: resp.statusText }));
@@ -161,7 +191,13 @@ async function ask(query) {
     renderMessages();
 
     // Save to history
-    historyItems.unshift({ q: query, a: answer, sources: citations, ts: Date.now() });
+    historyItems.unshift({
+      q: query,
+      a: answer,
+      sources: citations,
+      personality: data.personality || personaSelect.value,
+      ts: Date.now(),
+    });
     historyItems = historyItems.slice(0, 50);
     localStorage.setItem("history", JSON.stringify(historyItems));
     renderHistory();
@@ -215,7 +251,12 @@ modelSelect?.addEventListener('change', () => {
   toast(`Model: ${settings.model}`);
 });
 
+personaSelect?.addEventListener('change', () => {
+  settings.personality = personaSelect.value;
+  localStorage.setItem('settings', JSON.stringify(settings));
+  const label = personaSelect.value === 'fluent' ? 'Fluent English' : 'Pidgin Vibes';
+  toast(`Personality: ${label}`);
+});
+
 renderHistory();
 renderMessages();
-
-
