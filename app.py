@@ -10,8 +10,10 @@ import requests
 
 # Load environment variables from backend/.env if present
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "frontend"))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+FRONTEND_DIR = os.getenv(
+    "FRONTEND_DIR",
+    os.path.normpath(os.path.join(BASE_DIR, "..", "frontend"))
+)
 
 logger = logging.getLogger("sourcescout")
 
@@ -348,4 +350,4 @@ def api_chat():
         raise
 
 if __name__ == "__main__":
-    app.run(host=APP_HOST, port=APP_PORT, debug=APP_DEBUG)
+    app.run( debug=True)
