@@ -12,7 +12,6 @@ const sidebarToggle = document.getElementById("sidebarToggle");
 const themeToggle = document.getElementById("themeToggle");
 const modelSelect = document.getElementById("modelSelect");
 const personaSelect = document.getElementById("personaSelect");
-
 let convo = []; // {role, content, sources?, pending?}
 let historyItems = JSON.parse(localStorage.getItem("history") || "[]"); // [{q,a,ts}]
 let settings;

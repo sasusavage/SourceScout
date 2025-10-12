@@ -2,7 +2,7 @@
 
 A minimal full-stack web app that lets you ask questions and get sourced answers using OpenAI's Chat Completions API.
 
-## Features
+## Feature
 - HTML/CSS/JS frontend with history sidebar
 - Python Flask backend that calls OpenAI's Chat Completions API
 - Built-in personality switcher (default Sasu Jnr Pidgin vibes, optional Fluent English mode)

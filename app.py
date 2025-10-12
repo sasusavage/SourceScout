@@ -36,7 +36,7 @@ APP_HOST = os.getenv("APP_HOST", os.getenv("FLASK_RUN_HOST", "127.0.0.1"))
 APP_PORT = int(os.getenv("APP_PORT", os.getenv("PORT", os.getenv("FLASK_RUN_PORT", "5000"))))
 APP_DEBUG = os.getenv("APP_DEBUG", os.getenv("FLASK_DEBUG", "1")).lower() in {"1", "true", "yes"}
 PERSONALITY_PIDGIN_PATH = os.getenv(
-    "PERSONALITY_PIDGIN_PATH",
+    "PERSONALITY_PIDGIN_PATH" ,
     os.getenv("SYSTEM_PROMPT_PATH", os.path.join(BASE_DIR, "sasu_jnr_prompt.md")),
 )
 PERSONALITY_FLUENT_PATH = os.getenv(
