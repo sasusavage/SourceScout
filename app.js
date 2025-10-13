@@ -13,6 +13,16 @@ const themeToggle = document.getElementById("themeToggle");
 const modelSelect = document.getElementById("modelSelect");
 const personaSelect = document.getElementById("personaSelect");
 const modeSelect = document.getElementById("modeSelect");
+const feedbackSection = document.getElementById("feedbackSection");
+const feedbackForm = document.getElementById("feedbackForm");
+const feedbackName = document.getElementById("feedbackName");
+const feedbackEmail = document.getElementById("feedbackEmail");
+const feedbackMessage = document.getElementById("feedbackMessage");
+const feedbackStatus = document.getElementById("feedbackStatus");
+const feedbackSubmit = document.getElementById("feedbackSubmit");
+const feedbackCsrfInput = document.getElementById("feedbackCsrf");
+let feedbackCsrfToken = null;
+let feedbackEnabled = false;
 let convo = []; // {role, content, sources?, pending?}
 let historyItems = JSON.parse(localStorage.getItem("history") || "[]"); // [{q,a,ts}]
 let settings;
@@ -22,6 +32,9 @@ try {
   settings = {};
 }
 if (typeof settings !== "object" || settings === null) settings = {};
+
+const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/i;
+const FEEDBACK_MIN_MESSAGE_LENGTH = 10;
 
 const availableModels = Array.from(modelSelect.options).map((opt) => opt.value);
 if (settings.model && availableModels.includes(settings.model)) {
@@ -77,6 +90,151 @@ function applyTheme(theme, { announce = false } = {}) {
   localStorage.setItem('settings', JSON.stringify(settings));
   if (announce) {
     toast(`Theme: ${next === 'dark' ? 'Dark' : 'Light'}`);
+  }
+}
+
+function setFeedbackStatus(message = '', variant = 'info') {
+  if (!feedbackStatus) return;
+  feedbackStatus.textContent = message || '';
+  feedbackStatus.classList.remove('error', 'success');
+  if (variant === 'error') {
+    feedbackStatus.classList.add('error');
+  } else if (variant === 'success') {
+    feedbackStatus.classList.add('success');
+  }
+}
+
+function toggleFeedbackAvailability(enabled, message = '', variant = 'info') {
+  feedbackEnabled = enabled;
+  if (feedbackSection) {
+    feedbackSection.classList.toggle('disabled', !enabled);
+  }
+  if (feedbackSubmit) {
+    feedbackSubmit.disabled = !enabled;
+  }
+  setFeedbackStatus(message, variant);
+}
+
+async function refreshFeedbackCsrf({ silent = false } = {}) {
+  if (!feedbackForm) return;
+  if (!silent) {
+    setFeedbackStatus('Preparing secure feedback channel…');
+  }
+  try {
+    const resp = await fetch(`${API_BASE}/api/feedback/csrf`, { credentials: 'include' });
+    const data = await resp.json();
+    if (!resp.ok || !data.enabled) {
+      toggleFeedbackAvailability(false, 'Feedback is currently unavailable.', 'error');
+      return;
+    }
+    feedbackCsrfToken = data.token;
+    if (feedbackCsrfInput) {
+      feedbackCsrfInput.value = feedbackCsrfToken || '';
+    }
+    toggleFeedbackAvailability(true, 'Let us know what you think.');
+  } catch (err) {
+    console.error('Failed to fetch feedback CSRF token', err);
+    toggleFeedbackAvailability(false, 'Feedback endpoint unreachable right now.', 'error');
+  }
+}
+
+async function handleFeedbackSubmit(event) {
+  event.preventDefault();
+  if (!feedbackEnabled) {
+    await refreshFeedbackCsrf({ silent: true });
+    if (!feedbackEnabled) return;
+  }
+
+  const name = (feedbackName?.value || '').trim();
+  const email = (feedbackEmail?.value || '').trim();
+  const message = (feedbackMessage?.value || '').trim();
+
+  if (name.length < 2) {
+    setFeedbackStatus('Please add your name (at least 2 characters).', 'error');
+    feedbackName?.focus();
+    return;
+  }
+  if (email && !EMAIL_REGEX.test(email)) {
+    setFeedbackStatus('Email looks off—feel free to clear it if you prefer to stay anonymous.', 'error');
+    feedbackEmail?.focus();
+    return;
+  }
+  if (message.length < FEEDBACK_MIN_MESSAGE_LENGTH) {
+    setFeedbackStatus(`Share a bit more detail (minimum ${FEEDBACK_MIN_MESSAGE_LENGTH} characters).`, 'error');
+    feedbackMessage?.focus();
+    return;
+  }
+  if (!feedbackCsrfToken) {
+    await refreshFeedbackCsrf({ silent: true });
+    if (!feedbackCsrfToken) {
+      setFeedbackStatus('Unable to secure the feedback channel right now.', 'error');
+      return;
+    }
+  }
+
+  setFeedbackStatus('Sending to Telegram…');
+  if (feedbackSubmit) {
+    feedbackSubmit.disabled = true;
+    feedbackSubmit.dataset.originalLabel = feedbackSubmit.dataset.originalLabel || feedbackSubmit.textContent;
+    feedbackSubmit.textContent = 'Sending…';
+  }
+
+  let shouldThrottle = false;
+  try {
+    const resp = await fetch(`${API_BASE}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        name,
+        email,
+        message,
+        csrf_token: feedbackCsrfToken,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      if (data?.csrf_token) {
+        feedbackCsrfToken = data.csrf_token;
+        if (feedbackCsrfInput) feedbackCsrfInput.value = feedbackCsrfToken;
+      }
+      if (resp.status === 409) {
+        setFeedbackStatus('Looks like we just received this—thank you! Try again in a couple of minutes.', 'error');
+      } else if (resp.status === 400 && data?.error?.toLowerCase().includes('csrf')) {
+        setFeedbackStatus('Security token expired. Refreshing…', 'error');
+        await refreshFeedbackCsrf({ silent: true });
+      } else {
+        setFeedbackStatus(data.error || 'Could not submit feedback right now.', 'error');
+      }
+      return;
+    }
+
+    feedbackCsrfToken = data?.csrf_token || feedbackCsrfToken;
+    if (feedbackCsrfInput) feedbackCsrfInput.value = feedbackCsrfToken || '';
+    feedbackForm?.reset();
+    if (feedbackCsrfInput) feedbackCsrfInput.value = feedbackCsrfToken || '';
+    setFeedbackStatus('Thanks! Just got pinged in Telegram.', 'success');
+    toast('Feedback delivered. Thank you for your feedback.');
+
+    if (feedbackSubmit) {
+      shouldThrottle = true;
+      feedbackSubmit.disabled = true;
+      setTimeout(() => {
+        if (!feedbackSubmit) return;
+        feedbackSubmit.disabled = !feedbackEnabled;
+      }, 2000);
+    }
+  } catch (err) {
+    console.error('Feedback submission failed', err);
+    setFeedbackStatus('Network error while sending feedback.', 'error');
+  } finally {
+    if (feedbackSubmit) {
+      feedbackSubmit.textContent = feedbackSubmit.dataset.originalLabel || 'Send to Telegram';
+      if (!shouldThrottle) {
+        feedbackSubmit.disabled = !feedbackEnabled;
+      }
+    }
   }
 }
 
@@ -289,6 +447,12 @@ modeSelect?.addEventListener('change', () => {
   const label = modeSelect.value === 'web' ? 'Web Search' : 'Chat';
   toast(`Mode: ${label}`);
 });
+
+feedbackForm?.addEventListener('submit', handleFeedbackSubmit);
+
+if (feedbackForm) {
+  refreshFeedbackCsrf();
+}
 
 renderHistory();
 renderMessages();

@@ -30,10 +30,10 @@
       <label class="select">
         <span>Model</span>
         <select id="modelSelect">
-          <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
-          <option value="gpt-4o">gpt-4o</option>
-          <option value="o4-mini">o4-mini</option>
-          <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+          <option value="gpt-4o-mini" selected>Sasu-4o-mini</option>
+          <option value="gpt-4o">Sasu-4o</option>
+          <option value="o4-mini">Sasu-o4-mini</option>
+          <option value="gpt-4.1-mini">Sasu-4.1-mini</option>
         </select>
       </label>
       <button id="themeToggle" aria-label="Toggle theme" title="Toggle theme">🌗</button>
@@ -59,6 +59,31 @@
           <button type="submit" id="askBtn">Ask</button>
         </form>
         <div id="status" class="status"></div>
+      </section>
+
+      <section class="feedback" id="feedbackSection">
+        <div class="feedback-header">
+          <h2>Share quick feedback</h2>
+        </div>
+        <form id="feedbackForm" class="feedback-form" novalidate>
+          <input type="hidden" id="feedbackCsrf" name="csrf_token" />
+          <div class="field-group">
+            <label for="feedbackName">Name</label>
+            <input id="feedbackName" name="name" type="text" placeholder="How should we Call you?" minlength="2" maxlength="80" required />
+          </div>
+          <div class="field-group">
+            <label for="feedbackEmail">Email <span>(optional)</span></label>
+            <input id="feedbackEmail" name="email" type="email" placeholder="We'll only reach out if a reply is needed" maxlength="120" />
+          </div>
+          <div class="field-group">
+            <label for="feedbackMessage">Feedback</label>
+            <textarea id="feedbackMessage" name="message" rows="3" placeholder="What should we improve or celebrate?" minlength="10" maxlength="1500" required></textarea>
+          </div>
+          <div class="feedback-actions">
+            <button type="submit" id="feedbackSubmit">Send to SASU</button>
+            <span id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
       </section>
     </main>
   </div>

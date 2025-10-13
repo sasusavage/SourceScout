@@ -2,10 +2,14 @@ import os
 import json
 import re
 import logging
+import time
+import hashlib
+import secrets
 from urllib.parse import urlparse
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import requests
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.getenv(
@@ -21,6 +25,13 @@ load_dotenv(os.path.join(BASE_DIR, "..", ".env"))
 logger = logging.getLogger("sourcescout")
 
 app = Flask(__name__)
+
+app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("Missing FLASK_SECRET_KEY environment variable for session security")
+
+FEEDBACK_CSRF_SALT = os.getenv("FEEDBACK_CSRF_SALT", "feedback-form")
+feedback_serializer = URLSafeTimedSerializer(app.secret_key, salt=FEEDBACK_CSRF_SALT)
 # Allow CORS from local files (origin 'null') and localhost
 CORS(
     app,
@@ -41,6 +52,19 @@ APP_DEBUG = os.getenv("APP_DEBUG", os.getenv("FLASK_DEBUG", "1")).lower() in {"1
 PPLX_API_KEY = os.getenv("PPLX_API_KEY") or os.getenv("PERPLEXITY_API_KEY")
 PPLX_API_URL = os.getenv("PPLX_API_URL", os.getenv("PERPLEXITY_API_URL", "https://api.perplexity.ai/chat/completions"))
 PPLX_MODEL = os.getenv("PPLX_MODEL", os.getenv("PERPLEXITY_MODEL", "llama-3.1-sonar-small-128k-online"))
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+FEEDBACK_ENABLED = (
+    os.getenv("ENABLE_TELEGRAM_FEEDBACK", "true").lower() in {"1", "true", "yes"}
+    and bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+)
+FEEDBACK_DUP_TTL = int(os.getenv("FEEDBACK_DUPLICATE_TTL", "180"))
+FEEDBACK_COOKIE_SECURE = os.getenv("FEEDBACK_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
+recent_feedback_cache: dict[str, float] = {}
+
+if not FEEDBACK_ENABLED:
+    logger.info("Telegram feedback disabled (provide TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable)")
 
 WEB_SEARCH_DISABLED_MESSAGE = "Due to high demand Web SASU has turned off web search."
 
@@ -299,6 +323,56 @@ def strip_inline_citations(text: str | None) -> str:
     cleaned = re.sub(r"\s*\n\s*", lambda m: "\n", cleaned)
     return cleaned.strip()
 
+
+def generate_feedback_csrf() -> str:
+    return feedback_serializer.dumps({"nonce": secrets.token_hex(8)})
+
+
+def validate_feedback_csrf(token: str | None, cookie_token: str | None) -> bool:
+    if not token or not cookie_token or token != cookie_token:
+        return False
+    try:
+        feedback_serializer.loads(token, max_age=3600)
+        return True
+    except (BadSignature, SignatureExpired):
+        return False
+
+
+def is_duplicate_feedback(client_ip: str, message: str) -> bool:
+    if not message:
+        return False
+
+    now = time.time()
+    expired = [key for key, ts in recent_feedback_cache.items() if now - ts > FEEDBACK_DUP_TTL]
+    for key in expired:
+        recent_feedback_cache.pop(key, None)
+
+    fingerprint = hashlib.sha256(f"{client_ip}|{message}".encode("utf-8")).hexdigest()
+    if fingerprint in recent_feedback_cache:
+        return True
+
+    recent_feedback_cache[fingerprint] = now
+    return False
+
+
+def send_feedback_to_telegram(name: str, email: str, message: str) -> None:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise RuntimeError("missing_telegram_config")
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID.strip(),
+        "text": (
+            "\U0001F4E9 New Feedback Submission:\n"
+            f"\U0001F464 Name: {name or 'Anonymous'}\n"
+            f"\U0001F4E7 Email: {email or '(not provided)'}\n"
+            f"\U0001F4AC Feedback: {message or '(empty message)'}"
+        ),
+    }
+
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    resp = requests.post(api_url, data=payload, timeout=10)
+    resp.raise_for_status()
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -319,6 +393,82 @@ def styles_css():
 @app.get("/app.js")
 def app_js():
     return send_from_directory(FRONTEND_DIR, "app.js")
+
+
+@app.get("/api/feedback/csrf")
+def feedback_csrf():
+    if not FEEDBACK_ENABLED:
+        resp = make_response(jsonify({"enabled": False}))
+        resp.delete_cookie("feedback_csrf")
+        return resp, 503
+
+    token = generate_feedback_csrf()
+    resp = make_response(jsonify({"token": token, "enabled": True}))
+    resp.set_cookie(
+        "feedback_csrf",
+        token,
+        max_age=3600,
+        secure=FEEDBACK_COOKIE_SECURE,
+        httponly=True,
+        samesite="Lax",
+    )
+    return resp
+
+
+@app.post("/api/feedback")
+def submit_feedback():
+    if not FEEDBACK_ENABLED:
+        return jsonify({"error": "Feedback submission is currently disabled."}), 503
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip()
+    message = (data.get("message") or "").strip()
+    csrf_token = data.get("csrf_token")
+    cookie_token = request.cookies.get("feedback_csrf")
+
+    if not validate_feedback_csrf(csrf_token, cookie_token):
+        return jsonify({"error": "Invalid or missing CSRF token."}), 400
+
+    if len(name) < 2:
+        return jsonify({"error": "Please provide your name (at least 2 characters)."}), 400
+
+    if email and ("@" not in email or email.count("@") != 1 or email.startswith("@")):
+        return jsonify({"error": "Please provide a valid email address or leave it blank."}), 400
+
+    if len(message) < 10:
+        return jsonify({"error": "Feedback message is too short (minimum 10 characters)."}), 400
+
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    if is_duplicate_feedback(client_ip, message):
+        return jsonify({"error": "Duplicate feedback detected. Please wait before resubmitting."}), 409
+
+    try:
+        send_feedback_to_telegram(name, email, message)
+    except requests.HTTPError as exc:
+        err_resp = getattr(exc, "response", None)
+        app.logger.error("Telegram HTTPError: %s", getattr(err_resp, "text", str(exc)))
+        return jsonify({"error": "Failed to deliver feedback to Telegram."}), 502
+    except requests.RequestException as exc:
+        app.logger.error("Telegram RequestException: %s", exc)
+        return jsonify({"error": "Network error while sending feedback."}), 502
+    except RuntimeError as exc:
+        if str(exc) == "missing_telegram_config":
+            return jsonify({"error": "Server missing Telegram configuration."}), 500
+        raise
+
+    refreshed_token = generate_feedback_csrf()
+    resp = make_response(jsonify({"ok": True, "message": "Feedback delivered", "csrf_token": refreshed_token}))
+    resp.set_cookie(
+        "feedback_csrf",
+        refreshed_token,
+        max_age=3600,
+        secure=FEEDBACK_COOKIE_SECURE,
+        httponly=True,
+        samesite="Lax",
+    )
+    return resp
+
 
 @app.post("/api/ask")
 def ask():
